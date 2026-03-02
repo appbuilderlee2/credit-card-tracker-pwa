@@ -143,24 +143,38 @@ function render(unpaidRows) {
 async function load() {
   document.getElementById("sheetLink").href = CONFIG.sheetUrl;
 
-  // We query the unpaid block we created in the Dashboard tab: columns P:AC (14 columns)
-  // gviz query: select P,Q,R,S,T,U,V,W,X,Y,Z,AA,AB,AC
+  // Preferred (private): local API when running via SSH tunnel (same-origin)
+  try {
+    const res = await fetch("/api/unpaid", { cache: "no-store" });
+    if (res.ok) {
+      const j = await res.json();
+      if (j && Array.isArray(j.rows)) {
+        // Expect rows without the header
+        render(j.rows);
+        return;
+      }
+    }
+  } catch (e) {
+    // fall through to gviz
+  }
+
+  // Fallback (public): gviz query (requires Publish to web)
   const query = "select P,Q,R,S,T,U,V,W,X,Y,Z,AA,AB,AC where P is not null";
 
   try {
     const { rows } = await gvizQuery({ sheetId: CONFIG.sheetId, tabName: CONFIG.tabName, query });
-    // rows include header row because we included P10 header via normal cells. Remove if first row looks like header.
     const unpaid = rows.filter((r) => r && r.length && r[0] && r[0] !== "card");
     render(unpaid);
   } catch (e) {
     console.error(e);
-    setText("subTitle", "未連到資料（可能未 Publish to web）");
+    setText("subTitle", "未連到資料（本機 API / Publish 都未就緒）");
     const actionList = document.getElementById("actionList");
     actionList.innerHTML = `
       <div class="bg-white dark:bg-base-200 rounded-2xl p-5 border border-slate-100 dark:border-slate-700/50">
-        <div class="font-bold mb-1">未能讀取 Google Sheet</div>
+        <div class="font-bold mb-1">未能讀取資料</div>
         <div class="text-sm text-slate-600 dark:text-slate-300 mb-3">
-          GitHub Pages 版需要你先將 Sheet（或 Dashboard tab）Publish to web。
+          如果你係用 SSH tunnel 開本機版，請確保 server.py 正喺 127.0.0.1 跑緊；
+          如果係用 GitHub Pages，則需要先 Publish to web。
         </div>
         <a class="text-primary font-semibold" target="_blank" rel="noreferrer" href="${CONFIG.sheetUrl}">打開 Sheet</a>
       </div>`;
