@@ -63,6 +63,28 @@ def rows_to_json(rows: list[list[str]]) -> dict:
     return {"cols": cols, "rows": trimmed}
 
 
+def sheets_write_cell(cell: str, value: str):
+    run(["uv", "run", "scripts/sheets.py", "write", SHEET_ID, cell, value])
+
+
+def find_row_by_card(card_name: str) -> int:
+    # Read card column only
+    rows = sheets_get_tsv("A1:A500")
+    if not rows or len(rows) < 2:
+        raise RuntimeError("Sheet empty")
+    want = card_name.strip().lower()
+    hits = []
+    for idx, r in enumerate(rows[1:], start=2):
+        v = (r[0] if r else "").strip().lower()
+        if v == want:
+            hits.append(idx)
+    if not hits:
+        raise RuntimeError(f"card not found: {card_name}")
+    if len(hits) > 1:
+        raise RuntimeError(f"ambiguous card match: {card_name}")
+    return hits[0]
+
+
 class Handler(SimpleHTTPRequestHandler):
     def translate_path(self, path: str) -> str:
         # Serve files from repo root
@@ -94,6 +116,70 @@ class Handler(SimpleHTTPRequestHandler):
 
         # Default: static
         return super().do_GET()
+
+    def do_POST(self):
+        if self.path.startswith("/api/set_amount_due"):
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(length) or b"{}")
+                card = (payload.get("card") or "").strip()
+                amount = (payload.get("amount") or "").strip()
+                if not card:
+                    raise RuntimeError("missing card")
+                if amount == "":
+                    raise RuntimeError("missing amount")
+
+                row = find_row_by_card(card)
+                sheets_write_cell(f"Sheet1!D{row}", amount)
+                # also update amount_reported_on to today if requested
+                if payload.get("set_reported_on_today"):
+                    # Australia/Adelaide handled by sheet / scripts; set ISO date
+                    import datetime as dt
+                    from zoneinfo import ZoneInfo
+
+                    today = dt.datetime.now(ZoneInfo("Australia/Adelaide")).date().isoformat()
+                    sheets_write_cell(f"Sheet1!E{row}", today)
+
+                self._send_json({"ok": True, "row": row})
+            except Exception as e:
+                self._send_json({"error": str(e)}, status=500)
+            return
+
+        if self.path.startswith("/api/mark_paid"):
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(length) or b"{}")
+                card = (payload.get("card") or "").strip()
+                note = (payload.get("note") or "").strip()
+                if not card:
+                    raise RuntimeError("missing card")
+
+                # Mark paid but DO NOT rollover immediately (rollover cron handles next cycle)
+                cmd = [
+                    "python3",
+                    "/home/ubuntu/.openclaw/workspace/tools/credit_card_mark_paid.py",
+                    "--sheet",
+                    SHEET_ID,
+                    "--tab",
+                    "Sheet1",
+                    "--tz",
+                    "Australia/Adelaide",
+                    "--card",
+                    card,
+                    "--no-rollover",
+                ]
+                if note:
+                    cmd += ["--note", note]
+                p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                if p.returncode != 0:
+                    raise RuntimeError(p.stderr.strip() or p.stdout.strip() or f"mark_paid failed rc={p.returncode}")
+
+                self._send_json({"ok": True, "result": p.stdout.strip()})
+            except Exception as e:
+                self._send_json({"error": str(e)}, status=500)
+            return
+
+        self._send_json({"error": "not found"}, status=404)
 
 
 def main():

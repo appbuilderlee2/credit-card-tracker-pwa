@@ -108,9 +108,12 @@ function render(unpaidRows) {
             </div>
             <span class="px-2.5 py-1 rounded-full ${pill} text-[10px] font-bold uppercase tracking-wider">${pillText}</span>
           </div>
-          <div class="flex items-center justify-between">
+          <div class="flex items-center justify-between gap-2">
             <div class="text-sm font-semibold">${a.amount ? "$" + money(a.amount) : "(未填金額)"}</div>
-            <a class="text-primary text-sm font-semibold" target="_blank" rel="noreferrer" href="${CONFIG.sheetUrl}">開 Sheet</a>
+            <div class="flex gap-2">
+              <button data-action="amount" data-card="${a.card}" class="px-3 py-1.5 rounded-lg bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-xs font-bold">記金額</button>
+              <button data-action="paid" data-card="${a.card}" class="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-bold">已繳</button>
+            </div>
           </div>
         </div>`;
       })
@@ -180,6 +183,46 @@ async function load() {
       </div>`;
   }
 }
+
+async function postJson(url, body) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
+  return j;
+}
+
+// Delegated actions
+window.addEventListener("click", async (e) => {
+  const btn = e.target?.closest?.("button[data-action]");
+  if (!btn) return;
+  const action = btn.dataset.action;
+  const card = btn.dataset.card;
+
+  try {
+    if (action === "amount") {
+      const amount = prompt(`輸入 ${card} 本期應繳金額 amount_due：`);
+      if (amount === null) return;
+      await postJson("/api/set_amount_due", { card, amount, set_reported_on_today: false });
+      alert("已寫入 amount_due");
+      await load();
+    }
+
+    if (action === "paid") {
+      if (!confirm(`確認已繳：${card}？`)) return;
+      const note = prompt("可選：paid_note（留空都得）") || "";
+      await postJson("/api/mark_paid", { card, note });
+      alert("已標記已繳");
+      await load();
+    }
+  } catch (err) {
+    console.error(err);
+    alert(`操作失敗：${err.message || err}`);
+  }
+});
 
 document.getElementById("refreshBtn").addEventListener("click", () => load());
 load();
